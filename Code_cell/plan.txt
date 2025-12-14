@@ -1,57 +1,55 @@
-Hệ thống gồm 2 tác vụ chạy song song: tác vụ manage_cell thực thi chạy máy trạng thái để điều khiển hoạt động của BMS; tác vụ monitor_cell tiến hành đọc thông số từ ina219, tính toán dung lượng pin và hiệu chỉnh dung lượng pin dựa trên OCV mỗi khi OCV được cập nhật (OCV được đo ở tác vụ manage_cell). 
-Các thống số của 1 cell gồm OCV (điện áp mạch hở của 2 đầu cell), V (hiệu điện thế 2 đầu cell), I (dòng qua cell), dung lượng pin C của cell.
-Hệ thống gồm relay cell (đóng ngắt dòng ở cell), relay switch mode (chuyển đổi giữa chế độ sạc và xả của toàn cell), mosfet opto (chia dòng qua cell).
-Khi ngắt dòng ở cell (openCurrentCell), thứ tự thực hiện là thông dòng qua mosfet (THROUGH) rồi mới ngắt dòng ở relay cell (OPEN).
-Khi đóng dòng ở cell (closeCurrentCell), thứ tự thực hiện là đóng dòng ở relay cell (CLOSE) rồi mới chặn dòng qua mosfet (CUT_OFF).
-Khi đo OCV của pin, thứ tự thực hiện như sau:
-- Ngắt dòng ở cell.
-- Ngưng tác vụ đang thực hiện đo OCV trong 5s.
-- Đo điện áp Gán OCV = V.
+Hệ thống gồm 2 tác vụ chạy song song:
+- manage_cell: máy trạng thái điều khiển BMS, thực thi theo timer mềm (chu kỳ quản lý ~500 ms).
+- monitor_cell: đọc INA219, tích phân coulomb (cả sạc/xả), và hiệu chỉnh dung lượng theo OCV mỗi khi có OCV mới; chạy chu kỳ ~250 ms và được “hold” 1 s sau khi có thao tác relay/mode hoặc đang đo OCV (khi đó đo bị bỏ qua, I=0, V giữ nguyên/OCV).
 
-Các trạng thái của hệ thống trong tác vụ manage_cell gồm:
-{ INIT,             //khởi tạo, giống như code trong setup hiện tại 
-  CHARGING,         // sạc cho cell
-  DISCHARGING,      // xả cell
-  FULLY_CHARGED,    // đã đầy (dừng sạc)
-  PAUSED_HIGH_VOLT, // tạm dừng do quá áp sạc
-  FAULT_OVERCURRENT,// lỗi quá dòng nghiêm trọng (ngắt vĩnh viễn)
-  SOURCE_UNAVAILABLE }
-Các trạng thái sẽ được xác định thời điểm thực thi bằng software timer.
-  Trong đó:
-    - CHARGING:
-        + Điều khiển dòng: Đóng dòng sạc ở cell (CLOSE) và chuyển relay switch mode sang CHARGE.
-        + Ngưng tác vụ trong 1s (để tránh nhiễu do tiếp điểm relay).
-        + Kiểm tra thông số điện áp V, dòng điện I định kì mỗi CHECK_PERIOD_MS (1s):
-            - Nếu |I| > CURRENT_MAX thì ngay lập tức chuyển sang state FAULT_OVERCURRENT.
-            - Nếu V > VOLTAGE_CHARGE_MAX thì ngay lập tức chuyển sang state PAUSED_HIGH_VOLT. 
-            - Nếu dung lượng pin >= BAT_CAPACITY_MAH thì chuyển sang state FULLY_CHARGED.
-            - Nếu I < 0 hoặc V < OCV thì chuyển sang state SOURCE_UNAVAILABLE.
-        + Kiểm tra OCV định kì mỗi OCV_PERIOD_MS (10s).
-    - DISCHARGING:
-        + Đóng dòng sạc ở cell (CLOSE) và chuyển relay switch mode sang DISCHARGE.
-        + Ngưng tác vụ trong 1s (để tránh nhiễu do tiếp điểm relay).
-        + Kiểm tra thông số V, I, C định kì mỗi CHECK_PERIOD_MS (1s): 
-            - Nếu |I| > CURRENT_MAX thì ngay lập tức chuyển sang state FAULT_OVERCURRENT.
-            - Nếu V < 0.75 * VOLTAGE_MINIMUM_THRESHOLD hoặc dung lượng pin C < BAT_CAPACITY_MAH thì chuyển sang state CHARGING.
-    - FULLY_CHARGED:
-        + Ngắt dòng sạc ở cell (OPEN).
-        + Ngưng tác vụ trong 1s (để tránh nhiễu do tiếp điểm relay).
-        + Kiểm tra thông số OCV và C định kì mỗi 10s: nếu OCV < VOLTAGE_MINIMUM_THRESHOLD hoặc C < CAPACITY_MINIMUM_THRESHOLD * BAT_CAPACITY_MAH (CAPACITY_MINIMUM_THRESHOLD = 40%) thì chuyển sang state CHARGING.
-    - PAUSED_HIGH_VOLT:
-        + Ngắt dòng sạc ở cell (CLOSE).
-        + Ngưng tác vụ trong 3s.
-        + Kiểm tra thông số V định kì mỗi RETRY_DELAY_MS như sau:
-            - Đóng dòng sạc ở cell (CLOSE).
-            - Ngưng tác vụ trong 1s (để tránh nhiễu do tiếp điểm relay).
-            - Kiểm tra nếu V < VOLTAGE_CHARGE_MAX thì chuyển sang state CHARGING.
-    - FAULT_OVERCURRENT:
-        + Ngắt dòng sạc ở cell (OPEN).
-        + Hiển thị cảnh báo trên LCD.
-        + Ngưng tác vụ mãi mãi.
-    - SOURCE_UNAVAILABLE:
-        + Ngắt dòng sạc ở cell (CLOSE).
-        + Ngưng tác vụ trong RETRY_DELAY_MS.
-        + Kiểm tra thông số V, I định kì mỗi RETRY_DELAY_MS như sau:
-            - Đóng dòng sạc ở cell (CLOSE).
-            - Ngưng tác vụ trong 1s (để tránh nhiễu do tiếp điểm relay).
-            - Kiểm tra nếu V >= OCV hoặc I >= 0 thì chuyển sang state CHARGING.
+Các thông số cell: OCV, V, I, dung lượng C (mAh).
+Phần cứng: relay cell, relay switch mode (CHARGE/DISCHARGE), MOSFET opto. Trình tự:
+- openCurrentCell: MOSFET THROUGH -> relay OPEN.
+- closeCurrentCell: relay CLOSE -> MOSFET CUT_OFF.
+- Chuyển mode: setModeCharge / setModeDischarge kích relay mode và báo hold 1 s cho monitor.
+
+Đo OCV trong manage_cell:
+- Ngắt dòng (openCurrentCell).
+- Chờ settle 5 s (OCV_SETTLE_MS).
+- Đo điện áp, gán OCV.
+- OCV định kỳ mỗi 20 s (OCV_PERIOD_MS) trong CHARGING và các trạng thái cho phép; OCV đầu tiên được đo tại INIT trước khi vào CHARGING.
+
+Trạng thái manage_cell: { INIT, CHARGING, DISCHARGING, FULLY_CHARGED, PAUSED_HIGH_VOLT, FAULT_OVERCURRENT, SOURCE_UNAVAILABLE }
+
+- INIT:
+    * Đặt mode CHARGE, đo OCV đầu tiên. Khi OCV có giá trị, đóng lại đường cell và chuyển CHARGING.
+
+- CHARGING:
+    * Đóng relay cell, mode CHARGE.
+    * Kiểm tra mỗi CHECK_PERIOD_MS (1 s):
+        - |I| > CURRENT_MAX -> FAULT_OVERCURRENT.
+        - V > VOLTAGE_CHARGE_MAX -> PAUSED_HIGH_VOLT.
+        - C >= BAT_CAPACITY_MAH -> FULLY_CHARGED.
+        - Nếu I < 0 hoặc V < OCV (khi không đo OCV) -> SOURCE_UNAVAILABLE.
+    * OCV định kỳ mỗi 20 s (ngắt đo 5 s rồi đọc).
+
+- DISCHARGING:
+    * Đóng relay cell, mode DISCHARGE.
+    * Kiểm tra mỗi 1 s: |I| > CURRENT_MAX -> FAULT_OVERCURRENT.
+    * Nếu V < 0.75 * VOLTAGE_MINIMUM_THRESHOLD hoặc C < 0.95 * BAT_CAPACITY_MAH -> CHARGING.
+
+- FULLY_CHARGED:
+    * Mở relay cell.
+    * OCV định kỳ mỗi 20 s.
+    * Mỗi 20 s: nếu OCV < VOLTAGE_MINIMUM_THRESHOLD hoặc C < 40% dung lượng -> CHARGING.
+
+- PAUSED_HIGH_VOLT:
+    * Mở relay cell, chờ 3 s.
+    * Chu kỳ retry: mỗi RETRY_DELAY_MS (5 s) đóng lại, chờ RETRY_SAMPLE_MS (1.5 s) để đo; nếu V < VOLTAGE_CHARGE_MAX -> CHARGING, nếu vẫn cao -> mở lại và chờ tiếp. Quá dòng trong retry -> FAULT_OVERCURRENT.
+
+- SOURCE_UNAVAILABLE:
+    * Mở relay cell, chờ RETRY_DELAY_MS (5 s).
+    * Đóng lại và chờ RETRY_SAMPLE_MS (1.5 s); nếu V >= OCV hoặc I >= 0 -> CHARGING, ngược lại mở ra và chờ thêm.
+
+- FAULT_OVERCURRENT:
+    * Mở relay cell, dừng vĩnh viễn và báo LCD.
+
+Hiệu chỉnh dung lượng theo OCV:
+- Bảng nội suy tuyến tính OCV→%: 3.00V=0%, 3.45V=5%, 3.68V=10%, 3.74V=20%, 3.77V=30%, 3.79V=40%, 3.82V=50%, 3.87V=60%, 3.92V=70%, 3.98V=80%, 4.06V=90%, 4.20V=100%; dung lượng = % * BAT_CAPACITY_MAH.
+
+Lưu ý hold đo sau thao tác cơ khí/OCV: monitor_cell bỏ qua đo trong 1 s sau open/close/mode và trong khi ocvInProgress, đặt I=0 (không tích phân thêm) và giữ V hiện tại/OCV.
